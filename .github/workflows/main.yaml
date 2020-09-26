@@ -1,0 +1,65 @@
+name: Main
+on:
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: '0 0 * * 0'
+
+jobs:
+  build:
+    name: Build GLFW
+    runs-on: ubuntu-20.04
+    container:
+      image: dockercore/golang-cross:latest # Used because it contains mingw and osxcross
+    strategy:
+      matrix:
+        config:
+          - os: linux
+            filename: libglfw.so
+            options: ""
+          - os: windows
+            filename: glfw*.dll
+            options: -DCMAKE_TOOLCHAIN_FILE=CMake/x86_64-w64-mingw32.cmake
+          - os: darwin
+            filename: libglfw.dylib
+            options: -DCMAKE_TOOLCHAIN_FILE=CMake/o64-clang.cmake
+    steps:
+      - name: Install prerequisites
+        run: |
+          apt-get update
+          apt-get install cmake xorg-dev jq -y --no-install-recommends
+      - name: Checkout GLFW
+        id: checkout_glfw
+        run: |
+          git clone https://github.com/glfw/glfw.git
+          cd glfw
+          version=$(git describe --tags --abbrev=0 $(git rev-list --tags --max-count=1))
+          echo ::set-output name=version::$version
+          git checkout $version -b latest
+          printf "SET(CMAKE_SYSTEM_NAME Darwin)\nSET(CMAKE_SYSTEM_VERSION 1)\nSET(CMAKE_C_COMPILER o64-clang)\nSET(CMAKE_CXX_COMPILER o64-clang++)" > CMake/o64-clang.cmake
+      - name: Create release
+        continue-on-error: true
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.checkout_glfw.outputs.version }}
+          release_name: GLFW ${{ steps.checkout_glfw.outputs.version }}
+      - name: Build GLFW
+        run: |
+          mkdir glfw/build
+          cd glfw/build
+          cmake -DBUILD_SHARED_LIBS=ON -DGLFW_BUILD_EXAMPLES=OFF -DGLFW_BUILD_TESTS=OFF -DGLFW_BUILD_DOCS=OFF ${{ matrix.config.options }} ..
+          make
+      - name: Get real asset path
+        id: get_real_asset_path
+        run: |
+          echo ::set-output name=real_path::$(readlink -f glfw/build/src/${{ matrix.config.filename }})
+      - name: Upload asset
+        uses: softprops/action-gh-release@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.checkout_glfw.outputs.version }}
+          name: GLFW ${{ steps.checkout_glfw.outputs.version }}
+          files: ${{ steps.get_real_asset_path.outputs.real_path }}
